@@ -135,9 +135,38 @@ def distributed_init(cfg: MetaseqConfig):
                 cfg.distributed_training.distributed_init_method,
             )
         )
+
+        from pathlib import Path
+        from torch.distributed import FileStore
+        from time import sleep
+
+        run_directory, _ = os.path.split(cfg.common.tensorboard_logdir)
+        run_directory = Path(run_directory)
+        jobid = os.environ['SLURM_JOB_ID']
+        jank_root = run_directory / jobid / 'jankstore'
+        store = FileStore(f'/tmp/{jobid}_{cfg.distributed_training.distributed_rank}', cfg.distributed_training.distributed_world_size)
+
+        def _store_based_barrier(rank, store, timeout):
+            logger.info(f"Entering _store_based_barrier: {cfg.distributed_training.distributed_rank}")
+            group_count = torch.distributed.distributed_c10d._group_count
+            the_dir = jank_root / str(group_count)
+            the_dir.mkdir(exist_ok=True, parents=True)
+            the_file = the_dir / str(cfg.distributed_training.distributed_rank)
+            the_file.touch(exist_ok=False)
+            while True:
+                sleep(1)
+                count = len([None for _ in the_dir.iterdir()])
+                if count == cfg.distributed_training.distributed_world_size:
+                    break
+                logger.info(f"Waiting in _store_based_barrier {count} != {cfg.distributed_training.distributed_world_size}")
+            logger.info(f"Existing _store_based_barrier: {cfg.distributed_training.distributed_rank}")
+
+        torch.distributed.distributed_c10d._store_based_barrier = _store_based_barrier
+
         dist.init_process_group(
             backend=cfg.distributed_training.distributed_backend,
-            init_method=cfg.distributed_training.distributed_init_method,
+            #init_method=cfg.distributed_training.distributed_init_method,
+            store=store,
             world_size=cfg.distributed_training.distributed_world_size,
             rank=cfg.distributed_training.distributed_rank,
         )
@@ -151,6 +180,13 @@ def distributed_init(cfg: MetaseqConfig):
         # perform a dummy all-reduce to initialize the NCCL communicator
         if torch.cuda.is_available():
             dist.all_reduce(torch.zeros(1).cuda())
+
+        logger.info(
+            "HERE host {} as rank {}".format(
+                socket.gethostname(),
+                cfg.distributed_training.distributed_rank,
+            )
+        )
 
     cfg.distributed_training.distributed_rank = torch.distributed.get_rank()
 

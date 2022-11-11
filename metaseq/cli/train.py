@@ -422,7 +422,7 @@ def validate_and_save(
         )
 
     valid_losses = [None]
-    if do_validate:
+    if False and do_validate:
         valid_losses = validate(cfg, trainer, task, epoch_itr, valid_subsets)
 
     trainer.reset_dummy_batch(epoch_itr.first_batch)
